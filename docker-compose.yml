@@ -1,0 +1,68 @@
+services:
+  db:
+    image: mariadb:10.3
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./manifest:/docker-entrypoint-initdb.d
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    networks:
+      - wpbase
+
+  redis:
+    image: redis:alpine
+    container_name: redis_wpbase
+    restart: unless-stopped
+    networks:
+      - wpbase
+
+  wordpress:
+    build: ./wordpressbuild/
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./public_html:/var/www/html
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: ${MYSQL_USER}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
+      WORDPRESS_DEBUG: ${WORDPRESS_DEBUG}
+      WORDPRESS_DEBUG_LOG: ${WORDPRESS_DEBUG_LOG}
+      WORDPRESS_DEBUG_DISPLAY: ${WORDPRESS_DEBUG_DISPLAY}
+      VIRTUAL_HOST: ${SITE_DOMAIN}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_REDIS_HOST', getenv_docker('REDIS_HOST', 'redis'));
+        define('WP_REDIS_PORT', getenv_docker('REDIS_PORT', 6379));
+    networks:
+      - rproxy_reverse-proxy
+      - wpbase
+
+  phpmyadmin:
+    image: phpmyadmin
+    depends_on:
+      - db
+    environment:
+      PMA_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      PMA_USER: ${MYSQL_USER}
+      PMA_HOST: db
+      VIRTUAL_HOST: ${PMA_DOMAIN}
+      UPLOAD_LIMIT: 60M
+    networks:
+      - rproxy_reverse-proxy
+      - wpbase
+
+volumes:
+  db_data: {}
+
+networks:
+  rproxy_reverse-proxy:
+    external: true
+  wpbase:

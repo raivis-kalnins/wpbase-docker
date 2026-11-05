@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Get the current directory name (project name)
+PROJECT_NAME=$(basename "$(pwd)")
+
+# Try to find the WordPress container based on the project name and service prefix
+SERVICE_NAME=$(docker ps --format '{{.Names}}' | grep -E "^${PROJECT_NAME}(_|-)?wordpress-[0-9]*$" | head -n 1)
+
+if [ -z "$SERVICE_NAME" ]; then
+  echo "❌ Could not find a running WordPress container for project '$PROJECT_NAME'."
+  exit 1
+fi
+
+# Default to 'www-data' for WP CLI safety
+USER=${WP_CLI_USER:-www-data}
+
+# If no arguments given, show help
+if [ $# -eq 0 ]; then
+  echo "Usage: wp [wp-cli arguments]"
+  echo "Example: wp plugin list"
+  exit 0
+fi
+
+# Run the WP CLI command inside the container
+docker exec -u "$USER" -it "$SERVICE_NAME" wp "$@"
