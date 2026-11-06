@@ -1,68 +1,84 @@
+
 services:
   db:
-    image: mariadb:10.3
-    volumes:
-      - db_data:/var/lib/mysql
-      - ./manifest:/docker-entrypoint-initdb.d
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    networks:
-      - wpbase
-
-  redis:
-    image: redis:alpine
-    container_name: redis_wpbase
+    image: ${MARIADB_IMAGE:-mariadb:10.11}
     restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-wordpress}
+      MYSQL_USER: ${MYSQL_USER:-wordpress}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+    volumes:
+      - db_data_v2:/var/lib/mysql
+      - ./manifest:/docker-entrypoint-initdb.d:ro
     networks:
-      - wpbase
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'mariadb-admin ping --protocol=tcp -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}" --silent'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
   wordpress:
-    build: ./wordpressbuild/
+    build:
+      context: ./wordpressbuild
+      dockerfile: Dockerfile
+      args:
+        LOCAL_UID: 1000
+        LOCAL_GID: 1000
+    image: wpbase-wordpress:local
+    restart: unless-stopped
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
     volumes:
       - ./public_html:/var/www/html
     environment:
-      WORDPRESS_DB_HOST: db
-      WORDPRESS_DB_USER: ${MYSQL_USER}
-      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
-      WORDPRESS_DB_NAME: ${MYSQL_DATABASE}
-      WORDPRESS_DEBUG: ${WORDPRESS_DEBUG}
-      WORDPRESS_DEBUG_LOG: ${WORDPRESS_DEBUG_LOG}
-      WORDPRESS_DEBUG_DISPLAY: ${WORDPRESS_DEBUG_DISPLAY}
-      VIRTUAL_HOST: ${SITE_DOMAIN}
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${MYSQL_DATABASE:-wordpress}
+      WORDPRESS_DB_USER: ${MYSQL_USER:-wordpress}
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      WORDPRESS_DEBUG: ${WORDPRESS_DEBUG:-false}
       WORDPRESS_CONFIG_EXTRA: |
-        define('WP_REDIS_HOST', getenv_docker('REDIS_HOST', 'redis'));
-        define('WP_REDIS_PORT', getenv_docker('REDIS_PORT', 6379));
+        define('WP_DEBUG_LOG', ${WORDPRESS_DEBUG_LOG:-false} ? true : false);
+        define('WP_DEBUG_DISPLAY', ${WORDPRESS_DEBUG_DISPLAY:-false} ? true : false);
+        define('DISALLOW_FILE_EDIT', true);
+      VIRTUAL_HOST: ${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
+      VIRTUAL_PORT: 80
     networks:
+      - backend
       - rproxy_reverse-proxy
-      - wpbase
 
   phpmyadmin:
-    image: phpmyadmin
+    image: ${PMA_IMAGE:-phpmyadmin:5-apache}
+    restart: unless-stopped
+    profiles:
+      - tools
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     environment:
-      PMA_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      PMA_USER: ${MYSQL_USER}
       PMA_HOST: db
-      VIRTUAL_HOST: ${PMA_DOMAIN}
-      UPLOAD_LIMIT: 60M
+      PMA_PORT: 3306
+      PMA_USER: ${MYSQL_USER:-wordpress}
+      PMA_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      UPLOAD_LIMIT: ${UPLOAD_LIMIT:-60M}
+      VIRTUAL_HOST: ${PMA_DOMAIN:-db.wpbase.localhost}
+      VIRTUAL_PORT: 80
     networks:
+      - backend
       - rproxy_reverse-proxy
-      - wpbase
 
 volumes:
-  db_data: {}
+  db_data_v2:
 
 networks:
+  backend:
+    driver: bridge
+
   rproxy_reverse-proxy:
     external: true
-  wpbase:
+    name: rproxy_reverse-proxy
